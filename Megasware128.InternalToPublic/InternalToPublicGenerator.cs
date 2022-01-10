@@ -31,105 +31,88 @@ namespace Megasware128.InternalToPublic
 
         public void Execute(GeneratorExecutionContext context)
         {
-            try
+            var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name == "InternalToPublicAttribute");
+
+            foreach (var attribute in attributes)
             {
-                var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name == "InternalToPublicAttribute");
+                var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
+                var typeName = attribute.ConstructorArguments[1].Value.ToString();
 
-                foreach (var attribute in attributes)
+                var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
+
+                var assembly = Assembly.Load(assemblyId.GetDisplayName(fullKey: true));
+
+                if (assembly == null)
                 {
-                    var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
-                    var typeName = attribute.ConstructorArguments[1].Value.ToString();
+                    throw new Exception($"Could not find assembly {assemblyName}");
+                }
 
-                    var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
+                var internalType = assembly.GetType(typeName);
 
-                    var assembly = Assembly.Load(assemblyId.GetDisplayName(fullKey: true));
+                var publicType = assembly.GetTypes().First(t => t.IsPublic);
 
-                    if (assembly == null)
-                    {
-                        throw new Exception($"Could not find assembly {assemblyName}");
-                    }
+                if (internalType == null)
+                {
+                    throw new Exception($"Could not find type {typeName} in assembly {assemblyName}");
+                }
 
-                    var internalType = assembly.GetType(typeName);
-
-                    var publicType = assembly.GetTypes().First(t => t.IsPublic);
-
-                    if (internalType == null)
-                    {
-                        throw new Exception($"Could not find type {typeName} in assembly {assemblyName}");
-                    }
-
-                    var stringBuilder = new StringBuilder(@"using System.Reflection;
+                var stringBuilder = new StringBuilder(@"using System.Reflection;
 
 
 namespace Megasware128.InternalToPublic
 {
     static class ");
-                    stringBuilder.Append(internalType.Name);
-                    stringBuilder.AppendLine("{");
+                stringBuilder.Append(internalType.Name);
+                stringBuilder.AppendLine("{");
 
-                    stringBuilder.AppendLine($"private static Type internalType = typeof({publicType}).Assembly.GetType(\"{typeName}\");");
+                stringBuilder.AppendLine($"private static Type internalType = typeof({publicType}).Assembly.GetType(\"{typeName}\");");
 
-                    foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
+                foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
+                {
+                    stringBuilder.AppendLine($"public static {method.ReturnType.FullName} {method.Name}(");
+
+                    var parameters = method.GetParameters();
+
+                    for (var i = 0; i < parameters.Length; i++)
                     {
-                        stringBuilder.AppendLine($"public static {method.ReturnType.FullName} {method.Name}(");
+                        var parameter = parameters[i];
 
-                        var parameters = method.GetParameters();
+                        stringBuilder.Append($"{parameter.ParameterType.FullName} {parameter.Name}");
 
-                        for (var i = 0; i < parameters.Length; i++)
+                        if (i < parameters.Length - 1)
                         {
-                            var parameter = parameters[i];
-
-                            stringBuilder.Append($"{parameter.ParameterType.FullName} {parameter.Name}");
-
-                            if (i < parameters.Length - 1)
-                            {
-                                stringBuilder.Append(", ");
-                            }
+                            stringBuilder.Append(", ");
                         }
-
-                        stringBuilder.Append(")");
-
-                        stringBuilder.AppendLine("{");
-
-                        stringBuilder.AppendLine($"return (({method.ReturnType.FullName})internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.NonPublic)");
-                        stringBuilder.Append(".Invoke(null, new object[]{");
-
-                        for (var i = 0; i < parameters.Length; i++)
-                        {
-                            var parameter = parameters[i];
-
-                            stringBuilder.Append($"{parameter.Name}");
-
-                            if (i < parameters.Length - 1)
-                            {
-                                stringBuilder.Append(", ");
-                            }
-                        }
-
-                        stringBuilder.Append("}));");
-
-                        stringBuilder.AppendLine("}");
                     }
 
+                    stringBuilder.Append(")");
+
+                    stringBuilder.AppendLine("{");
+
+                    stringBuilder.AppendLine($"return (({method.ReturnType.FullName})internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.NonPublic)");
+                    stringBuilder.Append(".Invoke(null, new object[]{");
+
+                    for (var i = 0; i < parameters.Length; i++)
+                    {
+                        var parameter = parameters[i];
+
+                        stringBuilder.Append($"{parameter.Name}");
+
+                        if (i < parameters.Length - 1)
+                        {
+                            stringBuilder.Append(", ");
+                        }
+                    }
+
+                    stringBuilder.Append("}));");
+
                     stringBuilder.AppendLine("}");
-                    stringBuilder.Append("}");
-
-                    context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
                 }
-            }
-            catch (Exception ex)
-            {
-                // Write exception to diagnostic
-                context.ReportDiagnostic(Diagnostic.Create(
-                    new DiagnosticDescriptor("InternalToPublicGeneratorException",
-                        "InternalToPublicGeneratorException",
-                        "InternalToPublicGeneratorException: " + ex,
-                        "InternalToPublicGenerator",
-                        DiagnosticSeverity.Error,
-                        true),
-                    Location.None));
 
-                throw;
+                stringBuilder.AppendLine("}");
+                stringBuilder.Append("}");
+
+                context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
             }
         }
     }
