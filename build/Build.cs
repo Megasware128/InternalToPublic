@@ -63,4 +63,16 @@ class Build : NukeBuild
                 .EnableNoRestore());
         });
 
+    Target Pack => _ => _
+        .DependsOn(Compile)
+        .Executes(() =>
+        {
+            DotNetPack(s => s
+                .SetProject(Solution)
+                .SetConfiguration(Configuration)
+                .SetVersion(GitVersion.NuGetVersionV2)
+                .SetOutputDirectory(ArtifactsDirectory)
+                .EnableNoBuild()
+                .EnableNoRestore());
+        });
 }
