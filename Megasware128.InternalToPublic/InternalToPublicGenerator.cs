@@ -1,8 +1,12 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Text;
 
 namespace Megasware128.InternalToPublic
 {
@@ -11,7 +15,6 @@ namespace Megasware128.InternalToPublic
     {
         private const string attributeText = @"
 using System;
-using System.Reflection;
 namespace Megasware128.InternalToPublic
 {
     [AttributeUsage(AttributeTargets.Assembly, Inherited = false, AllowMultiple = true)]
@@ -31,88 +34,145 @@ namespace Megasware128.InternalToPublic
 
         public void Execute(GeneratorExecutionContext context)
         {
-            var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name == "InternalToPublicAttribute");
+            var mainSyntaxTree = context.Compilation.SyntaxTrees
+                                      .First(x => x.HasCompilationUnitRoot);
 
-            foreach (var attribute in attributes)
+            var directory = Path.GetDirectoryName(mainSyntaxTree.FilePath);
+
+            // Read project.assets.json
+            var projectFile = Path.Combine(directory, "obj", "project.assets.json");
+
+            using (var stream = File.OpenRead(projectFile))
             {
-                var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
-                var typeName = attribute.ConstructorArguments[1].Value.ToString();
+                var jsonDocument = JsonDocument.Parse(stream);
 
-                var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
+                var restore = jsonDocument.RootElement.GetProperty("project").GetProperty("restore");
+                var packagesPath = restore.GetProperty("packagesPath").GetString();
+                var targetFramework = jsonDocument.RootElement.GetProperty("targets").EnumerateObject().First().Value;
 
-                var assembly = Assembly.Load(assemblyId.GetDisplayName(fullKey: true));
+                var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name == "InternalToPublicAttribute");
 
-                if (assembly == null)
+                foreach (var attribute in attributes)
                 {
-                    throw new Exception($"Could not find assembly {assemblyName}");
-                }
+                    var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
+                    var typeName = attribute.ConstructorArguments[1].Value.ToString();
 
-                var internalType = assembly.GetType(typeName);
+                    var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
 
-                var publicType = assembly.GetTypes().First(t => t.IsPublic);
+                    var assembly = default(Assembly);
 
-                if (internalType == null)
-                {
-                    throw new Exception($"Could not find type {typeName} in assembly {assemblyName}");
-                }
+                    try
+                    {
+                        assembly = Assembly.Load(assemblyId.GetDisplayName(fullKey: true));
+                    }
+                    catch
+                    {
+                        var library = targetFramework.EnumerateObject().FirstOrDefault(l => l.Name.StartsWith(assemblyName));
 
-                var stringBuilder = new StringBuilder(@"using System.Reflection;
+                        var assemblyPath = Path.Combine(packagesPath, library.Name, library.Value.GetProperty("runtime").EnumerateObject().First().Name);
+
+                        assembly = Assembly.LoadFile(assemblyPath);
+                    }
+
+                    var internalType = assembly.GetType(typeName);
+
+                    var publicType = assembly.GetTypes().First(t => t.IsPublic);
+
+                    if (internalType == null)
+                    {
+                        throw new Exception($"Could not find type {typeName} in assembly {assemblyName}");
+                    }
+
+                    var stringBuilder = new StringBuilder(@"using System.Reflection;
 
 
 namespace Megasware128.InternalToPublic
 {
     static class ");
-                stringBuilder.Append(internalType.Name);
-                stringBuilder.AppendLine("{");
-
-                stringBuilder.AppendLine($"private static Type internalType = typeof({publicType}).Assembly.GetType(\"{typeName}\");");
-
-                foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
-                {
-                    stringBuilder.AppendLine($"public static {method.ReturnType.FullName} {method.Name}(");
-
-                    var parameters = method.GetParameters();
-
-                    for (var i = 0; i < parameters.Length; i++)
-                    {
-                        var parameter = parameters[i];
-
-                        stringBuilder.Append($"{parameter.ParameterType.FullName} {parameter.Name}");
-
-                        if (i < parameters.Length - 1)
-                        {
-                            stringBuilder.Append(", ");
-                        }
-                    }
-
-                    stringBuilder.Append(")");
-
+                    stringBuilder.Append(internalType.Name);
                     stringBuilder.AppendLine("{");
 
-                    stringBuilder.AppendLine($"return (({method.ReturnType.FullName})internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.NonPublic)");
-                    stringBuilder.Append(".Invoke(null, new object[]{");
+                    stringBuilder.AppendLine($"private static Type internalType = typeof({publicType}).Assembly.GetType(\"{typeName}\");");
 
-                    for (var i = 0; i < parameters.Length; i++)
+                    foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
                     {
-                        var parameter = parameters[i];
+                        if (method.ReturnType.IsGenericType) continue;
 
-                        stringBuilder.Append($"{parameter.Name}");
+                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : method.ReturnType.FullName)} {method.Name}(");
 
-                        if (i < parameters.Length - 1)
+                        methodbuilder.Replace("System.Void", "void");
+
+                        var parameters = method.GetParameters();
+
+                        for (var i = 0; i < parameters.Length; i++)
                         {
-                            stringBuilder.Append(", ");
+                            var parameter = parameters[i];
+
+                            if (parameter.ParameterType.IsGenericType) goto Skip;
+
+                            methodbuilder.Append($"{(parameter.ParameterType.IsNotPublic ? "object" : parameter.ParameterType.FullName)} {parameter.Name}");
+
+                            if (i < parameters.Length - 1)
+                            {
+                                methodbuilder.Append(", ");
+                            }
                         }
+
+                        methodbuilder.Append(")");
+
+                        methodbuilder.AppendLine("{");
+                        if (method.ReturnType != typeof(void))
+                        {
+                            methodbuilder.Append("return ");
+                        }
+                        if (!method.ReturnType.IsNotPublic && method.ReturnType != typeof(void))
+                        {
+                            methodbuilder.Append($"({method.ReturnType.FullName})");
+                        }
+                        methodbuilder.Append($"internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.NonPublic, null, new Type[] {{");
+
+                        for (var i = 0; i < parameters.Length; i++)
+                        {
+                            var parameter = parameters[i];
+
+                            methodbuilder.Append($"{parameter.Name}.GetType()");
+
+                            if (i < parameters.Length - 1)
+                            {
+                                methodbuilder.Append(", ");
+                            }
+                        }
+
+                        methodbuilder.Append("}, null)");
+
+                        methodbuilder.Append(".Invoke(null, new object[]{");
+
+                        for (var i = 0; i < parameters.Length; i++)
+                        {
+                            var parameter = parameters[i];
+
+                            methodbuilder.Append($"{parameter.Name}");
+
+                            if (i < parameters.Length - 1)
+                            {
+                                methodbuilder.Append(", ");
+                            }
+                        }
+
+                        methodbuilder.Append("});");
+
+                        methodbuilder.AppendLine("}");
+
+                        stringBuilder.AppendLine(methodbuilder.ToString());
+
+                    Skip: continue;
                     }
 
-                    stringBuilder.Append("}));");
-
                     stringBuilder.AppendLine("}");
+                    stringBuilder.Append("}");
+
+                    context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
                 }
-
-                stringBuilder.AppendLine("}");
-                stringBuilder.Append("}");
-
-                context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
             }
         }
     }

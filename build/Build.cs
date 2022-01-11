@@ -25,7 +25,7 @@ class Build : NukeBuild
     ///   - Microsoft VisualStudio     https://nuke.build/visualstudio
     ///   - Microsoft VSCode           https://nuke.build/vscode
 
-    public static int Main () => Execute<Build>(x => x.TestApp);
+    public static int Main() => Execute<Build>(x => x.TestApp);
 
     [Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
     readonly Configuration Configuration = IsLocalBuild ? Configuration.Debug : Configuration.Release;
@@ -41,6 +41,10 @@ class Build : NukeBuild
         .Executes(() =>
         {
             EnsureCleanDirectory(ArtifactsDirectory);
+            
+            var testAppDirectory = Solution.TestApp.Directory;
+            EnsureCleanDirectory(testAppDirectory / "bin");
+            EnsureCleanDirectory(testAppDirectory / "obj");
         });
 
     Target Restore => _ => _
