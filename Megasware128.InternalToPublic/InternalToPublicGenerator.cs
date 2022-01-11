@@ -81,7 +81,28 @@ namespace Megasware128.InternalToPublic
 
                     var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'));
 
-                    var publicTypeSymbol = ConvertTypeToSymbol(publicType, context.Compilation);
+                    var publicTypeSymbol = ConvertTypeToSymbol(publicType);
+
+                    INamedTypeSymbol ConvertTypeToSymbol(Type type)
+                    {
+                        if (type.IsGenericType)
+                        {
+                            var genericType = type.GetGenericTypeDefinition();
+
+                            var genericTypeArguments = type.GetGenericArguments();
+
+                            var genericTypeArgumentSymbols = new INamedTypeSymbol[genericTypeArguments.Length];
+
+                            for (var i = 0; i < genericTypeArguments.Length; i++)
+                            {
+                                genericTypeArgumentSymbols[i] = ConvertTypeToSymbol(genericTypeArguments[i]);
+                            }
+
+                            return context.Compilation.GetTypeByMetadataName(genericType.FullName).Construct(genericTypeArgumentSymbols);
+                        }
+
+                        return context.Compilation.GetTypeByMetadataName(type.FullName);
+                    }
 
                     var stringBuilder = new StringBuilder(@"using System;
 using System.Reflection;
@@ -98,7 +119,7 @@ namespace Megasware128.InternalToPublic
                     {
                         if (method.IsGenericMethodDefinition || method.Name.StartsWith("<")) continue;
 
-                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : ConvertTypeToSymbol(method.ReturnType, context.Compilation).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))} {method.Name}(");
+                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : ConvertTypeToSymbol(method.ReturnType).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))} {method.Name}(");
 
                         var parameters = method.GetParameters();
 
@@ -125,7 +146,7 @@ namespace Megasware128.InternalToPublic
                         }
                         if (!method.ReturnType.IsNotPublic && method.ReturnType != typeof(void))
                         {
-                            methodbuilder.Append($"({ConvertTypeToSymbol(method.ReturnType, context.Compilation).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)})");
+                            methodbuilder.Append($"({ConvertTypeToSymbol(method.ReturnType).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)})");
                         }
                         methodbuilder.Append($"internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[] {{");
 
@@ -172,27 +193,6 @@ namespace Megasware128.InternalToPublic
                     context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
                 }
             }
-        }
-
-        static INamedTypeSymbol ConvertTypeToSymbol(Type type, Compilation compilation)
-        {
-            if (type.IsGenericType)
-            {
-                var genericType = type.GetGenericTypeDefinition();
-
-                var genericTypeArguments = type.GetGenericArguments();
-
-                var genericTypeArgumentSymbols = new INamedTypeSymbol[genericTypeArguments.Length];
-
-                for (var i = 0; i < genericTypeArguments.Length; i++)
-                {
-                    genericTypeArgumentSymbols[i] = ConvertTypeToSymbol(genericTypeArguments[i], compilation);
-                }
-
-                return compilation.GetTypeByMetadataName(genericType.FullName).Construct(genericTypeArgumentSymbols);
-            }
-
-            return compilation.GetTypeByMetadataName(type.FullName);
         }
     }
 }
