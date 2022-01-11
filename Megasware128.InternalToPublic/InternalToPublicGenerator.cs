@@ -23,6 +23,8 @@ namespace Megasware128.InternalToPublic
         public InternalToPublicAttribute(string assemblyName, string typeName)
         {
         }
+
+        public string PublicType { get; set; }
     }
 }
 ";
@@ -56,6 +58,7 @@ namespace Megasware128.InternalToPublic
                 {
                     var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
                     var typeName = attribute.ConstructorArguments[1].Value.ToString();
+                    var publicTypeName = attribute.NamedArguments.FirstOrDefault(a => a.Key == "PublicType").Value;
 
                     var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
 
@@ -76,15 +79,12 @@ namespace Megasware128.InternalToPublic
 
                     var internalType = assembly.GetType(typeName);
 
-                    var publicType = assembly.GetTypes().First(t => t.IsPublic);
+                    var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'));
 
-                    if (internalType == null)
-                    {
-                        throw new Exception($"Could not find type {typeName} in assembly {assemblyName}");
-                    }
+                    var publicTypeSymbol = ConvertTypeToSymbol(publicType, context.Compilation);
 
-                    var stringBuilder = new StringBuilder(@"using System.Reflection;
-
+                    var stringBuilder = new StringBuilder(@"using System;
+using System.Reflection;
 
 namespace Megasware128.InternalToPublic
 {
@@ -92,15 +92,13 @@ namespace Megasware128.InternalToPublic
                     stringBuilder.Append(internalType.Name);
                     stringBuilder.AppendLine("{");
 
-                    stringBuilder.AppendLine($"private static Type internalType = typeof({publicType}).Assembly.GetType(\"{typeName}\");");
+                    stringBuilder.AppendLine($"private static Type internalType = typeof({publicTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}).Assembly.GetType(\"{typeName}\");");
 
-                    foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
+                    foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
                     {
-                        if (method.ReturnType.IsGenericType) continue;
+                        if (method.IsGenericMethodDefinition || method.Name.StartsWith("<")) continue;
 
-                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : method.ReturnType.FullName)} {method.Name}(");
-
-                        methodbuilder.Replace("System.Void", "void");
+                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : ConvertTypeToSymbol(method.ReturnType, context.Compilation).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))} {method.Name}(");
 
                         var parameters = method.GetParameters();
 
@@ -110,7 +108,7 @@ namespace Megasware128.InternalToPublic
 
                             if (parameter.ParameterType.IsGenericType) goto Skip;
 
-                            methodbuilder.Append($"{(parameter.ParameterType.IsNotPublic ? "object" : parameter.ParameterType.FullName)} {parameter.Name}");
+                            methodbuilder.Append($"{(parameter.ParameterType.IsNotPublic ? "object" : $"global::{parameter.ParameterType.FullName}")} {parameter.Name}");
 
                             if (i < parameters.Length - 1)
                             {
@@ -127,9 +125,9 @@ namespace Megasware128.InternalToPublic
                         }
                         if (!method.ReturnType.IsNotPublic && method.ReturnType != typeof(void))
                         {
-                            methodbuilder.Append($"({method.ReturnType.FullName})");
+                            methodbuilder.Append($"({ConvertTypeToSymbol(method.ReturnType, context.Compilation).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)})");
                         }
-                        methodbuilder.Append($"internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.NonPublic, null, new Type[] {{");
+                        methodbuilder.Append($"internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[] {{");
 
                         for (var i = 0; i < parameters.Length; i++)
                         {
@@ -174,6 +172,27 @@ namespace Megasware128.InternalToPublic
                     context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
                 }
             }
+        }
+
+        static INamedTypeSymbol ConvertTypeToSymbol(Type type, Compilation compilation)
+        {
+            if (type.IsGenericType)
+            {
+                var genericType = type.GetGenericTypeDefinition();
+
+                var genericTypeArguments = type.GetGenericArguments();
+
+                var genericTypeArgumentSymbols = new INamedTypeSymbol[genericTypeArguments.Length];
+
+                for (var i = 0; i < genericTypeArguments.Length; i++)
+                {
+                    genericTypeArgumentSymbols[i] = ConvertTypeToSymbol(genericTypeArguments[i], compilation);
+                }
+
+                return compilation.GetTypeByMetadataName(genericType.FullName).Construct(genericTypeArgumentSymbols);
+            }
+
+            return compilation.GetTypeByMetadataName(type.FullName);
         }
     }
 }
