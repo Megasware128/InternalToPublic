@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Nuke.Common;
 using Nuke.Common.CI;
+using Nuke.Common.CI.GitHubActions;
 using Nuke.Common.Execution;
 using Nuke.Common.Git;
 using Nuke.Common.IO;
@@ -17,6 +18,19 @@ using static Nuke.Common.Tools.DotNet.DotNetTasks;
 
 [CheckBuildProjectConfigurations]
 [ShutdownDotNetAfterServerBuild]
+[GitHubActions(
+    "continuous",
+    GitHubActionsImage.WindowsLatest,
+    GitHubActionsImage.UbuntuLatest,
+    GitHubActionsImage.MacOsLatest,
+    On = new[] { GitHubActionsTrigger.PullRequest, GitHubActionsTrigger.Push },
+    InvokedTargets = new[] { nameof(TestApp), nameof(Pack) })]
+[GitHubActions(
+    "release",
+    GitHubActionsImage.UbuntuLatest,
+    InvokedTargets = new[] { nameof(Publish) },
+    OnPushTags = new[] { "v*" },
+    ImportSecrets = new[] { nameof(NuGetApiKey) })]
 class Build : NukeBuild
 {
     /// Support plugins are available for:
@@ -30,6 +44,9 @@ class Build : NukeBuild
     [Parameter("Configuration to build - Default is 'Debug' (local) or 'Release' (server)")]
     readonly Configuration Configuration = IsLocalBuild ? Configuration.Debug : Configuration.Release;
 
+    [Parameter] readonly string NuGetSource;
+    [Parameter] readonly string NuGetApiKey;
+
     [Solution(GenerateProjects = true)] readonly Solution Solution;
     [GitRepository] readonly GitRepository GitRepository;
     [GitVersion] readonly GitVersion GitVersion;
@@ -41,7 +58,7 @@ class Build : NukeBuild
         .Executes(() =>
         {
             EnsureCleanDirectory(ArtifactsDirectory);
-            
+
             var testAppDirectory = Solution.TestApp.Directory;
             EnsureCleanDirectory(testAppDirectory / "bin");
             EnsureCleanDirectory(testAppDirectory / "obj");
@@ -69,6 +86,7 @@ class Build : NukeBuild
 
     Target TestApp => _ => _
         .DependsOn(Compile)
+        .Before(Pack)
         .Executes(() =>
         {
             DotNetRun(s => s
@@ -79,6 +97,7 @@ class Build : NukeBuild
 
     Target Pack => _ => _
         .DependsOn(Compile)
+        .Produces(ArtifactsDirectory / "*.nupkg")
         .Executes(() =>
         {
             DotNetPack(s => s
@@ -88,5 +107,15 @@ class Build : NukeBuild
                 .SetOutputDirectory(ArtifactsDirectory)
                 .EnableNoBuild()
                 .EnableNoRestore());
+        });
+
+    Target Publish => _ => _
+        .DependsOn(Pack)
+        .Executes(() =>
+        {
+            DotNetNuGetPush(s => s
+                .SetTargetPath(ArtifactsDirectory / "*.nupkg")
+                .SetSource(NuGetSource)
+                .SetApiKey(NuGetApiKey));
         });
 }
