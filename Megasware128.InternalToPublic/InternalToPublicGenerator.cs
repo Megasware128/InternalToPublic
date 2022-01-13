@@ -107,9 +107,9 @@ namespace Megasware128.InternalToPublic
                         catch (Exception ex)
                         {
                             context.ReportDiagnostic(Diagnostic.Create(
-                                new DiagnosticDescriptor("InternalToPublicGenerator_AssemblyLoadError",
-                                    "Error loading assembly",
-                                    $"Error loading assembly '{assemblyPath}'",
+                                new DiagnosticDescriptor("InternalToPublicGenerator_MissingAssembly",
+                                    $"Missing assembly '{assemblyPath}' ({ex.Message})",
+                                    $"Have you spelled the assembly name correctly?",
                                     "InternalToPublicGenerator",
                                     DiagnosticSeverity.Error,
                                     true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
