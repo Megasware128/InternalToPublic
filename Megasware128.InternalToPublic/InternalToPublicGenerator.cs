@@ -47,6 +47,18 @@ namespace Megasware128.InternalToPublic
             // Read project.assets.json
             var projectFile = Path.Combine(directory, "obj", "project.assets.json");
 
+            if (!File.Exists(projectFile))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    new DiagnosticDescriptor("InternalToPublicGenerator_MissingProjectFile",
+                        "Missing project.assets.json",
+                        "Have you forgotten to run 'dotnet restore' before running this generator?",
+                        "InternalToPublicGenerator",
+                        DiagnosticSeverity.Error,
+                        true),
+                    Location.None));
+            }
+
             using (var stream = File.OpenRead(projectFile))
             {
                 var jsonDocument = JsonDocument.Parse(stream);
@@ -55,13 +67,13 @@ namespace Megasware128.InternalToPublic
                 var packagesPath = restore.GetProperty("packagesPath").GetString();
                 var targetFramework = jsonDocument.RootElement.GetProperty("targets").EnumerateObject().First().Value;
 
-                var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name == "InternalToPublicAttribute");
+                var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name is "InternalToPublicAttribute");
 
                 foreach (var attribute in attributes)
                 {
                     var assemblyName = attribute.ConstructorArguments[0].Value.ToString();
                     var typeName = attribute.ConstructorArguments[1].Value.ToString();
-                    var publicTypeName = attribute.NamedArguments.FirstOrDefault(a => a.Key == "PublicType").Value;
+                    var publicTypeName = attribute.NamedArguments.FirstOrDefault(a => a.Key is "PublicType").Value;
 
                     var assemblyId = context.Compilation.SourceModule.ReferencedAssemblies.FirstOrDefault(a => a.Name == assemblyName);
 
@@ -75,14 +87,64 @@ namespace Megasware128.InternalToPublic
                     {
                         var library = targetFramework.EnumerateObject().FirstOrDefault(l => l.Name.StartsWith(assemblyName));
 
+                        if (string.IsNullOrEmpty(library.Name))
+                        {
+                            context.ReportDiagnostic(Diagnostic.Create(
+                                new DiagnosticDescriptor("InternalToPublicGenerator_MissingLibrary",
+                                    $"Missing library '{assemblyName}'",
+                                    $"Have you spelled the assembly name correctly?",
+                                    "InternalToPublicGenerator",
+                                    DiagnosticSeverity.Error,
+                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                        }
+
                         var assemblyPath = Path.Combine(packagesPath, library.Name, library.Value.GetProperty("runtime").EnumerateObject().First().Name);
 
-                        assembly = Assembly.LoadFile(assemblyPath);
+                        try
+                        {
+                            assembly = Assembly.LoadFile(assemblyPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            context.ReportDiagnostic(Diagnostic.Create(
+                                new DiagnosticDescriptor("InternalToPublicGenerator_AssemblyLoadError",
+                                    "Error loading assembly",
+                                    $"Error loading assembly '{assemblyPath}'",
+                                    "InternalToPublicGenerator",
+                                    DiagnosticSeverity.Error,
+                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                        }
                     }
 
                     var internalType = assembly.GetType(typeName);
 
+                    if (internalType is null)
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            new DiagnosticDescriptor("InternalToPublicGenerator_MissingType",
+                                $"Missing type '{typeName}' in assembly '{assemblyName}'",
+                                "Have you spelled the type name correctly?",
+                                "InternalToPublicGenerator",
+                                DiagnosticSeverity.Error,
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+
+                        continue;
+                    }
+
                     var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'));
+
+                    if (publicType is null)
+                    {
+                        context.ReportDiagnostic(Diagnostic.Create(
+                            new DiagnosticDescriptor("InternalToPublicGenerator_MissingPublicType",
+                                $"Missing public type '{publicTypeName}' in assembly '{assemblyName}'",
+                                "Have you spelled the public type name correctly?",
+                                "InternalToPublicGenerator",
+                                DiagnosticSeverity.Error,
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+
+                        continue;
+                    }
 
                     var publicTypeSyntax = ConvertTypeToSyntax(publicType);
 
