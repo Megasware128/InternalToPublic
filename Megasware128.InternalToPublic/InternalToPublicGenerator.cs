@@ -4,9 +4,12 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
+using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 
 namespace Megasware128.InternalToPublic
 {
@@ -81,116 +84,142 @@ namespace Megasware128.InternalToPublic
 
                     var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'));
 
-                    var publicTypeSymbol = ConvertTypeToSymbol(publicType);
+                    var publicTypeSyntax = ConvertTypeToSyntax(publicType);
 
-                    INamedTypeSymbol ConvertTypeToSymbol(Type type)
+                    TypeSyntax ConvertTypeToSyntax(Type type)
                     {
+                        // If type is void, return PredefinedTypeSyntax
+                        if (type == typeof(void))
+                        {
+                            return PredefinedType(Token(SyntaxKind.VoidKeyword));
+                        }
+
+                        var typeNamespace = type.Namespace;
+                        // Convert namespace to QualifiedNameSyntax
+                        var qualifiedName = ConvertNamespaceToQualifiedName(typeNamespace);
+
+                        NameSyntax ConvertNamespaceToQualifiedName(string namespaceName)
+                        {
+                            var parts = namespaceName.Split('.');
+
+                            NameSyntax current = AliasQualifiedName(IdentifierName(Token(SyntaxKind.GlobalKeyword)), IdentifierName(parts[0]));
+
+                            for (var i = 1; i < parts.Length; i++)
+                            {
+                                current = QualifiedName(current, IdentifierName(parts[i]));
+                            }
+
+                            return current;
+                        }
+
                         if (type.IsGenericType)
                         {
                             var genericType = type.GetGenericTypeDefinition();
 
+                            var genericTypeSyntax = GenericName(Regex.Replace(genericType.Name, @"`\d+$", string.Empty));
+
                             var genericTypeArguments = type.GetGenericArguments();
 
-                            var genericTypeArgumentSymbols = new INamedTypeSymbol[genericTypeArguments.Length];
+                            var genericTypeArgumentsSyntax = genericTypeArguments.Select(ConvertTypeToSyntax).ToArray();
 
-                            for (var i = 0; i < genericTypeArguments.Length; i++)
-                            {
-                                genericTypeArgumentSymbols[i] = ConvertTypeToSymbol(genericTypeArguments[i]);
-                            }
+                            var name = genericTypeSyntax.WithTypeArgumentList(TypeArgumentList(SeparatedList(genericTypeArgumentsSyntax)));
 
-                            return context.Compilation.GetTypeByMetadataName(genericType.FullName).Construct(genericTypeArgumentSymbols);
+                            return QualifiedName(qualifiedName, name);
                         }
 
-                        return context.Compilation.GetTypeByMetadataName(type.FullName);
+                        if (type.IsArray)
+                        {
+                            var arrayType = type.GetElementType();
+
+                            var arrayTypeSyntax = ArrayType(ConvertTypeToSyntax(arrayType));
+
+                            return arrayTypeSyntax;
+                        }
+
+                        return QualifiedName(qualifiedName, IdentifierName(type.Name));
                     }
 
-                    var stringBuilder = new StringBuilder(@"using System;
-using System.Reflection;
+                    var internalTypeDeclarator = VariableDeclarator(Identifier(nameof(internalType)))
+                        .WithInitializer(EqualsValueClause(InvocationExpression(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                    TypeOfExpression(publicTypeSyntax), IdentifierName(nameof(Type.Assembly))),
+                                IdentifierName(nameof(Assembly.GetType))),
+                        ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(typeName))))))));
 
-namespace Megasware128.InternalToPublic
-{
-    static class ");
-                    stringBuilder.Append(internalType.Name);
-                    stringBuilder.AppendLine("{");
+                    var internalTypeSyntax = FieldDeclaration(VariableDeclaration(ConvertTypeToSyntax(typeof(Type)), SingletonSeparatedList(internalTypeDeclarator)))
+                                                .WithModifiers(TokenList(Token(SyntaxKind.PrivateKeyword), Token(SyntaxKind.StaticKeyword)));
 
-                    stringBuilder.AppendLine($"private static Type internalType = typeof({publicTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}).Assembly.GetType(\"{typeName}\");");
+                    var methodDeclarationsSyntax = internalType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                                                               .Where(m => !m.GetParameters().Any(p => p.ParameterType.IsByRef))
+                                                               .Where(m => m.ReturnType.IsPublic && m.GetParameters().All(p => p.ParameterType.IsPublic))
+                                                               .Where(m => !m.Name.StartsWith("<"))
+                                                               .Where(m => !m.IsGenericMethodDefinition)
+                                                               .Select(m => ConvertMethodToSyntax(m))
+                                                               .ToArray();
 
-                    foreach (var method in internalType.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+                    MethodDeclarationSyntax ConvertMethodToSyntax(MethodInfo method)
                     {
-                        if (method.IsGenericMethodDefinition || method.Name.StartsWith("<")) continue;
+                        var methodName = method.Name;
 
-                        var methodbuilder = new StringBuilder($"public static {(method.ReturnType.IsNotPublic ? "object" : ConvertTypeToSymbol(method.ReturnType).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat))} {method.Name}(");
+                        var methodSyntax = MethodDeclaration(ConvertTypeToSyntax(method.ReturnType), Identifier(methodName))
+                            .WithModifiers(TokenList(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.StaticKeyword)))
+                            .WithParameterList(ParameterList(SeparatedList(method.GetParameters().Select(p => Parameter(Identifier(p.Name)).WithType(ConvertTypeToSyntax(p.ParameterType))))));
 
-                        var parameters = method.GetParameters();
+                        // internalType.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, parameters, null).Invoke(null, arguments);
 
-                        for (var i = 0; i < parameters.Length; i++)
-                        {
-                            var parameter = parameters[i];
+                        var invocationExpression =
+                            InvocationExpression(
+                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                    InvocationExpression(
+                                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression,
+                                            IdentifierName(nameof(internalType)),
+                                            IdentifierName(nameof(Type.GetMethod))),
+                                        ArgumentList(SeparatedList(new[]
+                                        {
+                                            Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(methodName))),
+                                            Argument(BinaryExpression(SyntaxKind.BitwiseOrExpression,
+                                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName(nameof(BindingFlags)), IdentifierName(nameof(BindingFlags.Public))),
+                                                BinaryExpression(SyntaxKind.BitwiseOrExpression,
+                                                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName(nameof(BindingFlags)), IdentifierName(nameof(BindingFlags.NonPublic))),
+                                                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName(nameof(BindingFlags)), IdentifierName(nameof(BindingFlags.Static)))))),
+                                            Argument(LiteralExpression(SyntaxKind.NullLiteralExpression)),
+                                            Argument(ArrayCreationExpression(
+                                                ArrayType(ConvertTypeToSyntax(typeof(Type)), SingletonList(ArrayRankSpecifier(SingletonSeparatedList<ExpressionSyntax>(OmittedArraySizeExpression())))),
+                                                InitializerExpression(SyntaxKind.ArrayInitializerExpression,
+                                                    SeparatedList<ExpressionSyntax>(method.GetParameters().Select(p => TypeOfExpression(ConvertTypeToSyntax(p.ParameterType))))))),
+                                            Argument(LiteralExpression(SyntaxKind.NullLiteralExpression))
+                                        }))),
+                                    IdentifierName(nameof(MethodBase.Invoke))),
+                                ArgumentList(SeparatedList(
+                                    new[]
+                                    {
+                                        Argument(LiteralExpression(SyntaxKind.NullLiteralExpression)),
+                                        Argument(ArrayCreationExpression(
+                                            ArrayType(ConvertTypeToSyntax(typeof(object)), SingletonList(ArrayRankSpecifier(SingletonSeparatedList<ExpressionSyntax>(OmittedArraySizeExpression())))),
+                                            InitializerExpression(SyntaxKind.ArrayInitializerExpression,
+                                                SeparatedList<ExpressionSyntax>(method.GetParameters().Select(p => IdentifierName(p.Name))))))
+                                    })));
 
-                            if (parameter.ParameterType.IsGenericType) goto Skip;
+                        var block = Block(method.ReturnType == typeof(void) ? ExpressionStatement(invocationExpression) :
+                            ReturnStatement(CastExpression(ConvertTypeToSyntax(method.ReturnType), invocationExpression)));
 
-                            methodbuilder.Append($"{(parameter.ParameterType.IsNotPublic ? "object" : $"global::{parameter.ParameterType.FullName}")} {parameter.Name}");
-
-                            if (i < parameters.Length - 1)
-                            {
-                                methodbuilder.Append(", ");
-                            }
-                        }
-
-                        methodbuilder.Append(")");
-
-                        methodbuilder.AppendLine("{");
-                        if (method.ReturnType != typeof(void))
-                        {
-                            methodbuilder.Append("return ");
-                        }
-                        if (!method.ReturnType.IsNotPublic && method.ReturnType != typeof(void))
-                        {
-                            methodbuilder.Append($"({ConvertTypeToSymbol(method.ReturnType).ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)})");
-                        }
-                        methodbuilder.Append($"internalType.GetMethod(\"{method.Name}\", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[] {{");
-
-                        for (var i = 0; i < parameters.Length; i++)
-                        {
-                            var parameter = parameters[i];
-
-                            methodbuilder.Append($"{parameter.Name}.GetType()");
-
-                            if (i < parameters.Length - 1)
-                            {
-                                methodbuilder.Append(", ");
-                            }
-                        }
-
-                        methodbuilder.Append("}, null)");
-
-                        methodbuilder.Append(".Invoke(null, new object[]{");
-
-                        for (var i = 0; i < parameters.Length; i++)
-                        {
-                            var parameter = parameters[i];
-
-                            methodbuilder.Append($"{parameter.Name}");
-
-                            if (i < parameters.Length - 1)
-                            {
-                                methodbuilder.Append(", ");
-                            }
-                        }
-
-                        methodbuilder.Append("});");
-
-                        methodbuilder.AppendLine("}");
-
-                        stringBuilder.AppendLine(methodbuilder.ToString());
-
-                    Skip: continue;
+                        return methodSyntax.WithBody(block);
                     }
 
-                    stringBuilder.AppendLine("}");
-                    stringBuilder.Append("}");
+                    var internalTypeDeclaration = ClassDeclaration(internalType.Name)
+                                                    .WithModifiers(TokenList(Token(SyntaxKind.InternalKeyword), Token(SyntaxKind.StaticKeyword)))
+                                                    .AddMembers(internalTypeSyntax)
+                                                    .AddMembers(methodDeclarationsSyntax);
 
-                    context.AddSource(internalType.Name + ".g.cs", stringBuilder.ToString());
+                    var namespaceDeclaration = NamespaceDeclaration(QualifiedName(IdentifierName(nameof(Megasware128)), IdentifierName(nameof(InternalToPublic))))
+                                                .AddMembers(internalTypeDeclaration);
+
+                    var compilationUnit = CompilationUnit()
+                        .WithUsings(SingletonList(UsingDirective(QualifiedName(IdentifierName(nameof(System)), IdentifierName(nameof(System.Reflection))))))
+                                            .AddMembers(namespaceDeclaration);
+
+                    context.AddSource($"{assemblyName}.{typeName}.g.cs", compilationUnit.NormalizeWhitespace().ToFullString());
                 }
             }
         }
