@@ -66,6 +66,7 @@ namespace Megasware128.InternalToPublic
                 var restore = jsonDocument.RootElement.GetProperty("project").GetProperty("restore");
                 var packagesPath = restore.GetProperty("packagesPath").GetString();
                 var targetFramework = jsonDocument.RootElement.GetProperty("targets").EnumerateObject().First().Value;
+                var libraries = jsonDocument.RootElement.GetProperty("libraries");
 
                 var attributes = context.Compilation.Assembly.GetAttributes().Where(a => a.AttributeClass.Name is "InternalToPublicAttribute");
 
@@ -85,9 +86,9 @@ namespace Megasware128.InternalToPublic
                     }
                     catch
                     {
-                        var library = targetFramework.EnumerateObject().FirstOrDefault(l => l.Name.StartsWith(assemblyName));
+                        var targetLibrary = targetFramework.EnumerateObject().FirstOrDefault(l => l.Name.StartsWith(assemblyName));
 
-                        if (string.IsNullOrEmpty(library.Name))
+                        if (string.IsNullOrEmpty(targetLibrary.Name))
                         {
                             context.ReportDiagnostic(Diagnostic.Create(
                                 new DiagnosticDescriptor("InternalToPublicGenerator_MissingLibrary",
@@ -98,7 +99,9 @@ namespace Megasware128.InternalToPublic
                                     true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
                         }
 
-                        var assemblyPath = Path.Combine(packagesPath, library.Name, library.Value.GetProperty("runtime").EnumerateObject().First().Name);
+                        var library = libraries.GetProperty(targetLibrary.Name);
+
+                        var assemblyPath = Path.Combine(packagesPath, library.GetProperty("path").GetString(), targetLibrary.Value.GetProperty("runtime").EnumerateObject().Single().Name);
 
                         try
                         {
