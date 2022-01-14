@@ -114,7 +114,7 @@ namespace Megasware128.InternalToPublic
                                     "Failed to load assembly {0} with error {1}",
                                     "InternalToPublicGenerator",
                                     DiagnosticSeverity.Error,
-                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), assemblyName, ex.Message));
+                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), assemblyPath, ex.Message));
                         }
                     }
 
@@ -128,7 +128,7 @@ namespace Megasware128.InternalToPublic
                                 "Missing type {0} in assembly {1}",
                                 "InternalToPublicGenerator",
                                 DiagnosticSeverity.Error,
-                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), typeName, assemblyName));
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), typeName, assembly.Location));
 
                         continue;
                     }
@@ -143,7 +143,7 @@ namespace Megasware128.InternalToPublic
                                 "Missing public type {0} in assembly {1}",
                                 "InternalToPublicGenerator",
                                 DiagnosticSeverity.Error,
-                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), publicTypeName, assemblyName));
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), publicTypeName, assembly.Location));
 
                         continue;
                     }
