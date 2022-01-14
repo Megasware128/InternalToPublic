@@ -50,13 +50,12 @@ namespace Megasware128.InternalToPublic
             if (!File.Exists(projectFile))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
-                    new DiagnosticDescriptor("InternalToPublicGenerator_MissingProjectFile",
+                    new DiagnosticDescriptor("InternalToPublicGenerator_MissingProjectAssets",
                         "Missing project.assets.json",
-                        "Have you forgotten to run 'dotnet restore' before running this generator?",
+                        "Missing project.assets.json",
                         "InternalToPublicGenerator",
                         DiagnosticSeverity.Error,
-                        true),
-                    Location.None));
+                        true), Location.None));
             }
 
             using (var stream = File.OpenRead(projectFile))
@@ -91,12 +90,12 @@ namespace Megasware128.InternalToPublic
                         if (string.IsNullOrEmpty(targetLibrary.Name))
                         {
                             context.ReportDiagnostic(Diagnostic.Create(
-                                new DiagnosticDescriptor("InternalToPublicGenerator_MissingLibrary",
-                                    $"Missing library '{assemblyName}'",
-                                    $"Have you spelled the assembly name correctly?",
+                                new DiagnosticDescriptor("InternalToPublicGenerator_MissingAssembly",
+                                    "Missing assembly",
+                                    "Missing assembly {0}",
                                     "InternalToPublicGenerator",
                                     DiagnosticSeverity.Error,
-                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), assemblyName));
                         }
 
                         var library = libraries.GetProperty(targetLibrary.Name);
@@ -110,12 +109,12 @@ namespace Megasware128.InternalToPublic
                         catch (Exception ex)
                         {
                             context.ReportDiagnostic(Diagnostic.Create(
-                                new DiagnosticDescriptor("InternalToPublicGenerator_MissingAssembly",
-                                    $"Missing assembly '{assemblyPath}' ({ex.Message})",
-                                    $"Have you spelled the assembly name correctly?",
+                                new DiagnosticDescriptor("InternalToPublicGenerator_FailedToLoadAssembly",
+                                    "Failed to load assembly",
+                                    "Failed to load assembly {0} with error {1}",
                                     "InternalToPublicGenerator",
                                     DiagnosticSeverity.Error,
-                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                                    true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), assemblyName, ex.Message));
                         }
                     }
 
@@ -125,11 +124,11 @@ namespace Megasware128.InternalToPublic
                     {
                         context.ReportDiagnostic(Diagnostic.Create(
                             new DiagnosticDescriptor("InternalToPublicGenerator_MissingType",
-                                $"Missing type '{typeName}' in assembly '{assemblyName}'",
-                                "Have you spelled the type name correctly?",
+                                "Missing type",
+                                "Missing type {0} in assembly {1}",
                                 "InternalToPublicGenerator",
                                 DiagnosticSeverity.Error,
-                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), typeName, assemblyName));
 
                         continue;
                     }
@@ -140,11 +139,11 @@ namespace Megasware128.InternalToPublic
                     {
                         context.ReportDiagnostic(Diagnostic.Create(
                             new DiagnosticDescriptor("InternalToPublicGenerator_MissingPublicType",
-                                $"Missing public type '{publicTypeName}' in assembly '{assemblyName}'",
-                                "Have you spelled the public type name correctly?",
+                                "Missing public type",
+                                "Missing public type {0} in assembly {1}",
                                 "InternalToPublicGenerator",
                                 DiagnosticSeverity.Error,
-                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation()));
+                                true), attribute.ApplicationSyntaxReference.GetSyntax().GetLocation(), publicTypeName, assemblyName));
 
                         continue;
                     }
