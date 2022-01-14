@@ -118,7 +118,7 @@ namespace Megasware128.InternalToPublic
                         }
                     }
 
-                    var internalType = assembly.GetType(typeName);
+                    var internalType = assembly.GetType(typeName, throwOnError: true);
 
                     if (internalType is null)
                     {
@@ -133,7 +133,7 @@ namespace Megasware128.InternalToPublic
                         continue;
                     }
 
-                    var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'));
+                    var publicType = publicTypeName.IsNull ? assembly.GetTypes().First(t => t.IsPublic) : assembly.GetType(publicTypeName.ToCSharpString().Trim('"'), throwOnError: true);
 
                     if (publicType is null)
                     {
