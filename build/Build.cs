@@ -104,6 +104,10 @@ class Build : NukeBuild
                 .SetProject(Solution)
                 .SetConfiguration(Configuration)
                 .SetVersion(GitVersion.NuGetVersionV2)
+                .SetAuthors("Megasware128")
+                .SetPackageProjectUrl(GitRepository.HttpsUrl[0..^4])
+                .SetRepositoryType("git")
+                .SetRepositoryUrl(GitRepository.HttpsUrl)
                 .SetOutputDirectory(ArtifactsDirectory)
                 .EnableNoBuild()
                 .EnableNoRestore());
