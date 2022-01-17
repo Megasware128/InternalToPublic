@@ -9,6 +9,7 @@ using Nuke.Common.IO;
 using Nuke.Common.ProjectModel;
 using Nuke.Common.Tooling;
 using Nuke.Common.Tools.DotNet;
+using Nuke.Common.Tools.GitHub;
 using Nuke.Common.Tools.GitVersion;
 using Nuke.Common.Utilities.Collections;
 using static Nuke.Common.EnvironmentInfo;
@@ -105,7 +106,7 @@ class Build : NukeBuild
                 .SetConfiguration(Configuration)
                 .SetVersion(GitVersion.NuGetVersionV2)
                 .SetAuthors("Megasware128")
-                .SetPackageProjectUrl(GitRepository.HttpsUrl[0..^4])
+                .SetPackageProjectUrl(GitRepository.GetGitHubBrowseUrl())
                 .SetRepositoryType("git")
                 .SetRepositoryUrl(GitRepository.HttpsUrl)
                 .SetOutputDirectory(ArtifactsDirectory)
